@@ -8,7 +8,8 @@
     "dev": "python3 -m http.server 4173 --directory public",
     "check": "node --check public/main.js && node --check public/model-cache.js && node --check public/inference.worker.js && node --check public/audio.worklet.js && node --test tests/*.test.mjs",
     "deploy": "npx wrangler deploy",
-    "preview": "npx wrangler dev --local"
+    "preview": "npx wrangler dev --local",
+    "build": "npm run check"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
