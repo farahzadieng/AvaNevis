@@ -1,5 +1,5 @@
 import { MODELS } from './model-registry.js';
-import { getInstalled, markInstalled, removeModels } from './model-cache.js';
+import { getInstalled, markInstalled, removeModels, reconcileInstalled, inspectCachedWeights } from './model-cache.js';
 import { TARGET_RATE, mergeAudio, resampleLinear, audioToMono, hasVoice, splitIntoChunks, formatTime } from './audio-utils.js';
 
 const $ = (id) => document.getElementById(id);
@@ -8,7 +8,7 @@ const state = {
   mode: 'live', recording: false, audioContext: null, mediaStream: null, audioSource: null,
   processor: null, silenceSink: null, liveFrames: [], liveLength: 0, startedAt: 0,
   liveTimer: null, flushTimer: null, selectedFile: null, queue: [], processing: false,
-  jobCounter: 0, session: 0, currentJob: null, totalChunks: 0, finishedChunks: 0, removing: false
+  jobCounter: 0, session: 0, currentJob: null, totalChunks: 0, finishedChunks: 0, removing: false, modelStatusTimer: null
 };
 let toastTimer;
 const PERSIAN_NUM = new Intl.NumberFormat('fa-IR');
@@ -56,6 +56,11 @@ function setMode(mode) {
 function showModels() {
   if (state.recording || state.processing || state.loading || state.removing) { notify('در زمان پردازش یا دانلود نمی‌توان تنظیمات را تغییر داد.'); return; }
   renderModels();
+  reconcileInstalled().then(({ installed, previouslyMarked }) => {
+    renderModels();
+    if (Object.keys(previouslyMarked).length && !Object.keys(installed).length)
+      notify('مدل قبلی در حافظه مرورگر پیدا نشد. لطفاً دوباره مدل را انتخاب کنید.');
+  }).catch(() => {});
   $('modelOverlay').classList.remove('hidden');
   $('closeModal').classList.toggle('hidden', !state.ready);
 }
@@ -100,6 +105,7 @@ function createWorker() {
   state.worker = new Worker('/inference.worker.js', { type: 'module' });
   state.worker.addEventListener('message', onWorkerMessage);
   state.worker.addEventListener('error', (e) => {
+    clearTimeout(state.modelStatusTimer);
     state.loading = false; state.processing = false; state.ready = false;
     renderModels(); toggleModelButtons(false);
     $('downloadMessage').textContent = 'موتور اجرا با خطا مواجه شد.';
@@ -116,6 +122,12 @@ function loadModel(id) {
   $('downloadMessage').textContent = 'آماده‌سازی موتور هوش مصنوعی…';
   $('downloadPercent').textContent = '—'; $('downloadFile').textContent = '';
   $('downloadBar').style.width = '0%';
+  clearTimeout(state.modelStatusTimer);
+  state.modelStatusTimer = setTimeout(() => {
+    if (state.loading) {
+      $('downloadMessage').textContent = 'آماده‌سازی مدل طولانی شده است. اگر مرورگر حافظه کافی نداشته باشد ممکن است راه‌اندازی متوقف شود.';
+    }
+  }, 180000);
   toggleModelButtons(true); updateIndicator(); createWorker();
   state.worker.postMessage({ type: 'load', modelId: id, preferredDevice: navigator.gpu ? 'webgpu' : 'wasm' });
 }
@@ -133,20 +145,29 @@ function onWorkerMessage({ data }) {
         $('downloadBar').style.width = `${Math.max(0, Math.min(100, percent))}%`;
         $('downloadPercent').textContent = `${Math.round(percent)}%`;
       }
-      if (data.status === 'done') $('downloadMessage').textContent = 'فایل دریافت شد؛ در حال آماده‌سازی…';
+      if (data.status === 'done') $('downloadMessage').textContent = 'دانلود این فایل تمام شد؛ مدل هنوز در حال بارگذاری است…';
       break;
     }
     case 'ready':
+      clearTimeout(state.modelStatusTimer);
       state.ready = true; state.loading = false; state.modelId = data.modelId;
-      localStorage.setItem('avanevis-last-model', data.modelId); markInstalled(data.modelId);
+      localStorage.setItem('avanevis-last-model', data.modelId);
       toggleModelButtons(false); updateIndicator(); renderModels();
       $('downloadBox').classList.add('hidden'); $('modelOverlay').classList.add('hidden');
-      notify('مدل آماده است؛ پردازش فقط روی دستگاه شما انجام می‌شود.');
+      // Cache verification happens AFTER successful inference engine initialization.
+      inspectCachedWeights(MODELS.find(m => m.id === data.modelId)).then(audit => {
+        if (audit.complete) markInstalled(data.modelId);
+        else notify('مدل آماده است، اما نگهداری فایل‌ها در حافظه مرورگر تأیید نشد؛ ممکن است بعداً دوباره دانلود شود.');
+        renderModels();
+      }).catch(() => {});
+      notify('مدل با موفقیت بارگذاری شد و آماده پردازش فارسی است.');
       break;
     case 'error':
+      clearTimeout(state.modelStatusTimer);
       state.loading = false; state.ready = false;
       toggleModelButtons(false); updateIndicator(); renderModels();
-      $('downloadMessage').textContent = 'بارگذاری مدل ناموفق بود؛ مدل دیگر یا مرورگر دیگری را امتحان کنید.';
+      $('downloadMessage').textContent = data.message || 'بارگذاری مدل ناموفق بود؛ حافظه و سازگاری دستگاه را بررسی کنید.';
+      $('downloadPercent').textContent = 'خطا';
       notify(data.message);
       break;
     case 'result': finishJob(data, null); break;
@@ -289,6 +310,11 @@ async function copyText() {
 }
 function bootstrap() {
   renderModels();
+  reconcileInstalled().then(({ installed, previouslyMarked }) => {
+    renderModels();
+    if (Object.keys(previouslyMarked).length && !Object.keys(installed).length)
+      notify('مدل قبلی در حافظه مرورگر پیدا نشد. لطفاً دوباره مدل را انتخاب کنید.');
+  }).catch(() => {});
   $('modelOverlay').classList.remove('hidden');
   $('closeModal').classList.add('hidden');
   $('closeModal').addEventListener('click', closeModels);

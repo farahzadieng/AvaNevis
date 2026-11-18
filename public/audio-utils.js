@@ -8,18 +8,38 @@ export function mergeAudio(parts) {
   return output;
 }
 
+// Band-limited windowed-sinc downsampling avoids folding high-frequency noise
+// into the 16 kHz Whisper input. Retain the historical export name for callers.
 export function resampleLinear(data, originalRate, targetRate = TARGET_RATE) {
-  if (!Number.isFinite(originalRate) || originalRate <= 0) throw new Error('Sample rate نامعتبر است.');
+  if (!Number.isFinite(originalRate) || originalRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0)
+    throw new Error('Sample rate نامعتبر است.');
   if (originalRate === targetRate) return new Float32Array(data);
-  const newLength = Math.max(1, Math.round(data.length * targetRate / originalRate));
-  const output = new Float32Array(newLength);
+  if (!data.length) return new Float32Array(0);
+  const length = Math.max(1, Math.round(data.length * targetRate / originalRate));
+  const output = new Float32Array(length);
   const ratio = originalRate / targetRate;
-  for (let i = 0; i < newLength; i++) {
-    const index = i * ratio;
-    const left = Math.floor(index);
-    const right = Math.min(data.length - 1, left + 1);
-    const fraction = index - left;
-    output[i] = (data[left] || 0) * (1 - fraction) + (data[right] || 0) * fraction;
+  if (ratio <= 1) {
+    for (let i = 0; i < length; i++) {
+      const at = i * ratio, left = Math.floor(at), right = Math.min(data.length - 1, left + 1);
+      output[i] = (data[left] || 0) * (1 - (at - left)) + (data[right] || 0) * (at - left);
+    }
+    return output;
+  }
+  const cutoff = .48 / ratio;
+  const radius = Math.max(16, Math.ceil(12 * ratio));
+  for (let i = 0; i < length; i++) {
+    const center = i * ratio;
+    let sum = 0, weights = 0;
+    for (let j = Math.max(0, Math.ceil(center - radius)); j <= Math.min(data.length - 1, Math.floor(center + radius)); j++) {
+      const delta = j - center;
+      const x = 2 * Math.PI * cutoff * delta;
+      const sinc = Math.abs(x) < 1e-8 ? 1 : Math.sin(x) / x;
+      const window = .5 + .5 * Math.cos(Math.PI * delta / radius);
+      const w = 2 * cutoff * sinc * window;
+      sum += data[j] * w;
+      weights += w;
+    }
+    output[i] = weights ? sum / weights : 0;
   }
   return output;
 }

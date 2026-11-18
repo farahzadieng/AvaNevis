@@ -1,6 +1,6 @@
-# آوانویسنویس — Persian Transcribe (v0.1)
+# آوانویس — Persian Transcribe (v0.1.1)
 
-A minimal, privacy-first, Persian-only PWA for running Whisper **inside the browser**. UI font: user-supplied AradVF variable WOFF2, weights 800 (headings), 400 (body), 300 (transcript). **The font file is not included in the ZIP; copy your own provided `AradVF(1).woff2` to `public/AradVF.woff2` before deployment.** Palette: `#B0A6DF` and `#F2F1EA`.
+A minimal, privacy-first, Persian-only PWA for running Whisper **inside the browser**. UI font: user-supplied AradVF variable WOFF2, weights 800 (headings), 400 (body), 300 (transcript). **The user-supplied font is included in `public/AradVF.woff2` in this updated source package.** Palette: `#B0A6DF` and `#F2F1EA`.
 
 ## What is included
 
@@ -19,7 +19,7 @@ A minimal, privacy-first, Persian-only PWA for running Whisper **inside the brow
 |---|---|---|---|
 | Large v3 | `onnx-community/whisper-large-v3-ONNX` | encoder fp16; merged decoder fp16 | high memory usage |
 | Turbo FP16 | `onnx-community/whisper-large-v3-turbo` | encoder fp16; merged decoder fp16 | balanced |
-| Turbo Q8 | `onnx-community/whisper-large-v3-turbo` | encoder q8; merged decoder q8 | smaller model, not necessarily faster than fp16 on GPU |
+| Turbo Q8 | `onnx-community/whisper-large-v3-turbo` | encoder int8; merged decoder int8 | smaller model, not necessarily faster than fp16 on GPU |
 
 **Important:** These are ONNX models, *not* the GGML files of whisper.cpp. Their download sizes differ from GGML weights. Numbers in the UI are approximate and may change depending on model revisions and ancillary assets. The actual inference RAM/GPU memory can be considerably higher than downloaded weights.
 
@@ -34,17 +34,25 @@ python3 -m http.server 4173 --directory public
 
 > The browser needs internet access to download the Transformers.js runtime from jsDelivr on first load and the weights from Hugging Face. HTTPS or localhost is required for the microphone. Model files may be multiple GB. This is NOT a demo/mock interface: clicking a model starts an actual runtime load.
 
-## Deploy to Cloudflare Workers
+## Deploy automatically from GitHub (recommended)
 
-Node.js 20+ recommended. In the project directory:
+**No local `wrangler login`, GitHub Actions, Cloudflare API token in GitHub, or model hosting is needed.** Cloudflare Workers Builds handles deployments when you push to `main`.
 
-```bash
-npm install
-npx wrangler login
-npm run deploy
-```
+1. Upload the **contents** of this project folder to the root of a GitHub repository. `package.json`, `wrangler.jsonc`, and `public/` must be at the repository root.
+2. In **Cloudflare Dashboard → Workers & Pages → Create → Import a repository** (the exact label can vary), connect GitHub and select the repository.
+3. Set **Production branch** to `main`, **Root directory** to `/`, **Build command** to `npm run build`, **Deploy command** to `npm run deploy`.
+4. Ensure the Worker name is **`avanevis`**, matching `wrangler.jsonc`. Confirm and deploy.
+5. Later pushes to `main` trigger automated build and deployment; check the **Builds/Deployments** tab for status.
 
-Set your own Worker name in `wrangler.jsonc` before deploying. The app consists of static assets and needs no API, KV, R2, D1, paid inference, credentials or backend functions. Cloudflare can serve the site from your `*.workers.dev` domain.
+`npm run build` runs the code/unit tests and returns a failing exit code if they fail. All app files are already in `public/`, so there is no separate frontend compilation step. `npm run deploy` runs Wrangler using the static asset configuration under `wrangler.jsonc`. Cloudflare supplies build authentication through its Git integration.
+
+**Font:** For the supplied AradVF typography, place your licensed/user-owned `AradVF.woff2` in `public/` before pushing to the repository. This ZIP deliberately does not redistribute a font file. The CSS provides fallback fonts if it is absent. **Privacy:** the models download from public Hugging Face when the user chooses one, not during GitHub/Cloudflare deployment. Audio/transcripts are not transmitted to Cloudflare by the app.
+
+More detailed instructions and troubleshooting: [`GITHUB_CLOUDFLARE.md`](GITHUB_CLOUDFLARE.md).
+
+### Optional manual deployment
+
+If you ever choose to deploy directly from a development machine, you can still run `npm install`, `npx wrangler login`, and `npm run deploy`. This is **not needed** for Git-connected deployment.
 
 ## Limitations and real-device validation
 
@@ -85,3 +93,13 @@ This runs syntax checks and Node.js unit tests for the audio pipeline and model 
 
 ## فونت اختصاصی
 فایل فونت همراه بسته منتشر نمی‌شود. برای استفاده از فونت خودتان `AradVF.woff2` را در مسیر `public/AradVF.woff2` قرار دهید. تنظیمات وزن فعلی: نام برند ۹۰۰، عناوین اصلی ۹۰۰، متن معمولی ۴۰۰ و متن رونویسی ۳۰۰.
+
+## v0.1.1 troubleshooting / known limitations
+
+- Browser inference is **not** guaranteed to run on mobile: Safari may evict cached multi-GB weights or terminate the worker when memory is insufficient. A 100% **file** download is not the same as a ready-to-use model. The UI now reports load status separately.
+- Q8 UI option now resolves to the **INT8** ONNX files that actually exist in the public repository. This profile runs on WASM/CPU as a compatibility choice and may be **slow**, especially on iPhone. For FP16, WebGPU is preferred where supported. Neither path is certified on iPhone 15.
+- Prior faulty cache flags are re-audited at startup, requiring both matching ONNX weight files. If a model was evicted, the app no longer claims it is installed.
+- The transcription worker requests Persian transcription, controls runaway decoding and rejects obviously repetitive or predominantly Latin junk results. This is a safety guard, **not proof of transcription accuracy**. Record clear speech and avoid feeding silence/noise.
+- Audio resampling now applies an anti-alias filter for downsampling from microphones.
+- To ensure the latest version is loaded after Cloudflare redeployment, close all tabs for the PWA, reopen, and reload. Old model files may need deletion under settings.
+- Tests: run `npm run check`. These are code/unit tests; live Hugging Face downloads, full ASR inference, and real iOS Safari are **not** included in the local test suite.

@@ -25,11 +25,11 @@ export const MODELS = Object.freeze([
   {
     id: 'turbo-q8',
     name: 'Whisper Turbo Q8',
-    subtitle: 'سبک‌تر و سریع‌تر برای دانلود',
+    subtitle: 'کم‌حجم‌تر (INT8)' ,
     description: 'نسخه ۸بیتی Turbo؛ سرعت نهایی وابسته به مرورگر و دستگاه است.',
     size: 'حدود ۱٫۱ گیگابایت',
     model: 'onnx-community/whisper-large-v3-turbo',
-    dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' },
+    dtype: { encoder_model: 'int8', decoder_model_merged: 'int8' },
     recommended: true,
     desktopOnly: false
   }

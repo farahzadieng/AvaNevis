@@ -35,6 +35,39 @@ export function isVariantWeight(url, model) {
 export function shouldDeleteUrl(url, model, preserveSameRepo) {
   return isModelUrl(url, model) && (!preserveSameRepo || isVariantWeight(url, model));
 }
+
+// A localStorage flag is NOT proof that Safari actually kept multi-GB model files.
+// We check for both ONNX weights in the Transformer's real browser cache.
+export async function inspectCachedWeights(model) {
+  if (!model || !('caches' in globalThis)) return { complete: false, files: [], reason: 'cache-unavailable' };
+  const dtype = model.dtype.encoder_model;
+  const expected = [`encoder_model_${dtype}.onnx`, `decoder_model_merged_${dtype}.onnx`];
+  const present = new Set();
+  try {
+    for (const name of await caches.keys()) {
+      if (!MODEL_CACHE_PREFIX.test(name)) continue;
+      const cache = await caches.open(name);
+      for (const request of await cache.keys()) {
+        if (!isModelUrl(request.url, model)) continue;
+        const file = decodeURIComponent(new URL(request.url).pathname.split('/').at(-1) || '');
+        if (expected.includes(file)) present.add(file);
+      }
+    }
+  } catch { return { complete: false, files: [...present], reason: 'cache-read-failed' }; }
+  return { complete: expected.every(name => present.has(name)), files: [...present], expected };
+}
+export async function reconcileInstalled() {
+  const previous = getInstalled();
+  const next = {};
+  const audits = {};
+  for (const model of MODELS) {
+    audits[model.id] = await inspectCachedWeights(model);
+    if (audits[model.id].complete) next[model.id] = true;
+  }
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  return { installed: next, audits, previouslyMarked: previous };
+}
+
 export async function removeModels(ids, { installed = getInstalled() } = {}) {
   const targets = MODELS.filter(m => ids.includes(m.id));
   if (!targets.length) return { deleted: 0, skipped: 0 };

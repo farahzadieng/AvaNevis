@@ -6,7 +6,7 @@ import { MODELS, getModel } from '../public/model-registry.js';
 test('three model selections map to public repositories', () => {
   assert.equal(MODELS.length, 3);
   for (const model of MODELS) assert.match(model.model, /^onnx-community\//);
-  assert.equal(getModel('turbo-q8').dtype.decoder_model_merged, 'q8');
+  assert.equal(getModel('turbo-q8').dtype.decoder_model_merged, 'int8');
 });
 test('merges consecutive buffers', () => {
   assert.deepEqual([...mergeAudio([new Float32Array([1, 2]), new Float32Array([3])])], [1, 2, 3]);
