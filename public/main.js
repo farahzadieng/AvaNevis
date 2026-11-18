@@ -1,4 +1,5 @@
 import { MODELS } from './model-registry.js';
+import { chooseStartupModel } from './model-startup.js';
 import { getInstalled, markInstalled, removeModels, reconcileInstalled, inspectCachedWeights } from './model-cache.js';
 import { TARGET_RATE, mergeAudio, resampleLinear, audioToMono, hasVoice, splitIntoChunks, recordingToChunks, formatTime } from './audio-utils.js';
 
@@ -8,7 +9,7 @@ const state = {
   mode: 'live', recording: false, audioContext: null, mediaStream: null, audioSource: null,
   processor: null, silenceSink: null, liveFrames: [], liveLength: 0, startedAt: 0,
   liveTimer: null, flushTimer: null, selectedFile: null, queue: [], processing: false,
-  stopping: false, jobCounter: 0, session: 0, currentJob: null, totalChunks: 0, finishedChunks: 0, removing: false, modelStatusTimer: null
+  stopping: false, jobCounter: 0, session: 0, currentJob: null, totalChunks: 0, finishedChunks: 0, removing: false, modelStatusTimer: null, autoRestoring: false, startupComplete: false
 };
 let toastTimer;
 const PERSIAN_NUM = new Intl.NumberFormat('fa-IR');
@@ -62,9 +63,9 @@ function showModels() {
       notify('مدل قبلی در حافظه مرورگر پیدا نشد. لطفاً دوباره مدل را انتخاب کنید.');
   }).catch(() => {});
   $('modelOverlay').classList.remove('hidden');
-  $('closeModal').classList.toggle('hidden', !state.ready);
+  $('closeModal').classList.toggle('hidden', !Object.keys(getInstalled()).length && !state.ready);
 }
-function closeModels() { if (state.ready && !state.loading && !state.removing) $('modelOverlay').classList.add('hidden'); }
+function closeModels() { if (!state.loading && !state.removing && (state.ready || Object.keys(getInstalled()).length)) $('modelOverlay').classList.add('hidden'); }
 function renderModels() {
   const installed = getInstalled();
   $('modelGrid').innerHTML = MODELS.map(m => {
@@ -97,6 +98,12 @@ async function deleteModels(ids) {
     const summary = await removeModels(ids);
     if (ids.includes(localStorage.getItem('avanevis-last-model'))) localStorage.removeItem('avanevis-last-model');
     notify(`مدل پاک شد (${PERSIAN_NUM.format(summary.deleted)} فایل از کش).`);
+    if (!state.ready) {
+      const available = await reconcileInstalled();
+      const replacement = chooseStartupModel(available.installed, localStorage.getItem('avanevis-last-model'));
+      if (replacement) { state.autoRestoring = true; loadModel(replacement); }
+      else { $('modelOverlay').classList.remove('hidden'); $('closeModal').classList.add('hidden'); }
+    }
   } catch(e) { notify('حذف مدل ناموفق بود: ' + (e?.message || e)); }
   finally { state.removing = false; renderModels(); updateIndicator(); }
 }
@@ -107,6 +114,7 @@ function createWorker() {
   state.worker.addEventListener('error', (e) => {
     clearTimeout(state.modelStatusTimer);
     state.loading = false; state.processing = false; state.ready = false;
+    state.autoRestoring = false; $('modelOverlay').classList.remove('hidden');
     renderModels(); toggleModelButtons(false);
     $('downloadMessage').textContent = 'موتور اجرا با خطا مواجه شد.';
     notify('بارگذاری موتور انجام نشد. اتصال اینترنت و سازگاری مرورگر را بررسی کنید.');
@@ -118,6 +126,7 @@ function toggleModelButtons(disabled) { document.querySelectorAll('.choose-model
 function loadModel(id) {
   if (state.loading || state.recording || state.processing) return;
   state.loading = true; state.ready = false; state.selectedModel = id;
+  if (state.autoRestoring) setProcessing('در حال آماده‌سازی مدل ذخیره‌شده…', true);
   $('downloadBox').classList.remove('hidden');
   $('downloadMessage').textContent = 'آماده‌سازی موتور هوش مصنوعی…';
   $('downloadPercent').textContent = '—'; $('downloadFile').textContent = '';
@@ -153,6 +162,8 @@ function onWorkerMessage({ data }) {
       state.ready = true; state.loading = false; state.modelId = data.modelId;
       localStorage.setItem('avanevis-last-model', data.modelId);
       toggleModelButtons(false); updateIndicator(); renderModels();
+      state.autoRestoring = false;
+      setProcessing('آماده');
       $('downloadBox').classList.add('hidden'); $('modelOverlay').classList.add('hidden');
       // Cache verification happens AFTER successful inference engine initialization.
       inspectCachedWeights(MODELS.find(m => m.id === data.modelId)).then(audit => {
@@ -164,7 +175,10 @@ function onWorkerMessage({ data }) {
       break;
     case 'error':
       clearTimeout(state.modelStatusTimer);
-      state.loading = false; state.ready = false;
+      state.loading = false; state.ready = false; state.autoRestoring = false;
+      setProcessing('آماده');
+      $('modelOverlay').classList.remove('hidden');
+      $('closeModal').classList.toggle('hidden', !Object.keys(getInstalled()).length);
       toggleModelButtons(false); updateIndicator(); renderModels();
       $('downloadMessage').textContent = data.message || 'بارگذاری مدل ناموفق بود؛ حافظه و سازگاری دستگاه را بررسی کنید.';
       $('downloadPercent').textContent = 'خطا';
@@ -317,15 +331,35 @@ async function copyText() {
   try { await navigator.clipboard.writeText(text); notify('متن کپی شد.'); }
   catch { $('transcript').focus(); $('transcript').select(); const result = document.execCommand('copy'); notify(result ? 'متن کپی شد.' : 'متن را انتخاب و به‌صورت دستی کپی کنید.'); }
 }
-function bootstrap() {
-  renderModels();
-  reconcileInstalled().then(({ installed, previouslyMarked }) => {
+async function restoreStartupModel() {
+  // Audit the actual browser cache before trusting a saved model choice.
+  // Returning users go straight to the workspace if a model can load.
+  try {
+    const { installed, previouslyMarked } = await reconcileInstalled();
     renderModels();
-    if (Object.keys(previouslyMarked).length && !Object.keys(installed).length)
-      notify('مدل قبلی در حافظه مرورگر پیدا نشد. لطفاً دوباره مدل را انتخاب کنید.');
-  }).catch(() => {});
+    const remembered = localStorage.getItem('avanevis-last-model');
+    const candidate = chooseStartupModel(installed, remembered);
+    if (candidate) {
+      state.autoRestoring = true;
+      loadModel(candidate);
+      return;
+    }
+    if (Object.keys(previouslyMarked).length)
+      notify('فایل‌های مدل قبلی در حافظه مرورگر پیدا نشدند. یک مدل انتخاب کنید.');
+  } catch (error) {
+    console.warn('Unable to inspect saved models:', error);
+    notify('بررسی مدل‌های ذخیره‌شده انجام نشد. یک مدل انتخاب کنید.');
+  } finally {
+    state.startupComplete = true;
+  }
   $('modelOverlay').classList.remove('hidden');
   $('closeModal').classList.add('hidden');
+}
+function bootstrap() {
+  renderModels();
+  // The modal remains hidden while checking whether an installed model exists.
+  // A valid cached model is loaded automatically without another selection prompt.
+  restoreStartupModel();
   $('closeModal').addEventListener('click', closeModels);
   $('changeModel').addEventListener('click', showModels);
   $('modelGrid').addEventListener('click', e => {

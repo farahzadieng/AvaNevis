@@ -20,3 +20,6 @@
 .model-card .choose-model{flex:1;min-width:78px}
 .brand-name,.modal-title h2,.intro h1{font-weight:900}
 @media(max-width:750px){.settings-section-title{flex-direction:column;align-items:flex-start}.settings-foot{flex-direction:column;align-items:stretch}.settings-foot .danger-button{width:100%}}
+
+/* Startup dialog is only visible when no usable local model exists. */
+.overlay.hidden{display:none!important}
