@@ -1,6 +1,17 @@
 // ONNX weights come from public Hugging Face repositories. No API tokens are used.
 export const MODELS = Object.freeze([
   {
+    id: 'persian-base',
+    name: 'Whisper Base فارسی',
+    subtitle: 'سبک و آموزش‌دیده برای فارسی',
+    description: 'مدل Base که مخصوص گفتار فارسی آموزش تکمیلی دیده؛ برای موبایل و دسکتاپ. کیفیت نهایی به صدا بستگی دارد.',
+    size: 'حدود ۱۵۰ تا ۳۰۰ مگابایت (بسته به فایل‌ها)',
+    model: 'armantee/whisper-base-persian-onnx',
+    dtype: 'q8',
+    recommended: true,
+    desktopOnly: false
+  },
+  {
     id: 'large',
     name: 'Whisper Large v3',
     subtitle: 'حداکثر دقت',
@@ -30,7 +41,7 @@ export const MODELS = Object.freeze([
     size: 'حدود ۱٫۱ گیگابایت',
     model: 'onnx-community/whisper-large-v3-turbo',
     dtype: { encoder_model: 'int8', decoder_model_merged: 'int8' },
-    recommended: true,
+    recommended: false,
     desktopOnly: false
   }
 ]);

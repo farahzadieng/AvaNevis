@@ -57,3 +57,18 @@ test('cache audit requires BOTH encoder and decoder, never trusts a previous fla
   cacheData.set(url('decoder_model_merged_int8.onnx'), 1);
   assert.equal((await inspectCachedWeights(q8)).complete, true);
 });
+
+test('Persian base uses real quantized ONNX filenames in cache audit', async () => {
+  const base = getModel('persian-base');
+  const baseUrl = name => `https://huggingface.co/armantee/whisper-base-persian-onnx/resolve/main/onnx/${name}`;
+  const { inspectCachedWeights } = await import('../public/model-cache.js');
+  const files = new Map([[baseUrl('encoder_model_quantized.onnx'), true]]);
+  globalThis.caches = {
+    keys: async () => ['transformers-cache'],
+    open: async () => ({ keys: async () => [...files.keys()].map(url => ({url})) })
+  };
+  assert.equal((await inspectCachedWeights(base)).complete, false);
+  files.set(baseUrl('decoder_model_merged_quantized.onnx'), true);
+  assert.equal((await inspectCachedWeights(base)).complete, true);
+  assert.equal(isVariantWeight(baseUrl('encoder_model_quantized.onnx'), base), true);
+});

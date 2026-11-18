@@ -29,7 +29,7 @@ self.onmessage = async ({ data }) => {
       if (!transcriber) {
         notify('status', { phase: 'download', text: 'در حال دانلود و بارگذاری مدل…' });
         // INT8 Whisper exports are the CPU/WASM path; FP16 uses WebGPU when supported.
-        let device = config.id === 'turbo-q8' ? 'wasm' : (data.preferredDevice === 'webgpu' && !!self.navigator?.gpu ? 'webgpu' : 'wasm');
+        let device = (config.id === 'turbo-q8' || config.id === 'persian-base') ? 'wasm' : (data.preferredDevice === 'webgpu' && !!self.navigator?.gpu ? 'webgpu' : 'wasm');
         lastDevice = device;
         notify('device', { device });
         transcriber = await pipeline('automatic-speech-recognition', config.model, {

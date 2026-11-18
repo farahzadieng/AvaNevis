@@ -1,6 +1,6 @@
 import { MODELS } from './model-registry.js';
 import { getInstalled, markInstalled, removeModels, reconcileInstalled, inspectCachedWeights } from './model-cache.js';
-import { TARGET_RATE, mergeAudio, resampleLinear, audioToMono, hasVoice, splitIntoChunks, formatTime } from './audio-utils.js';
+import { TARGET_RATE, mergeAudio, resampleLinear, audioToMono, hasVoice, splitIntoChunks, recordingToChunks, formatTime } from './audio-utils.js';
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -8,7 +8,7 @@ const state = {
   mode: 'live', recording: false, audioContext: null, mediaStream: null, audioSource: null,
   processor: null, silenceSink: null, liveFrames: [], liveLength: 0, startedAt: 0,
   liveTimer: null, flushTimer: null, selectedFile: null, queue: [], processing: false,
-  jobCounter: 0, session: 0, currentJob: null, totalChunks: 0, finishedChunks: 0, removing: false, modelStatusTimer: null
+  stopping: false, jobCounter: 0, session: 0, currentJob: null, totalChunks: 0, finishedChunks: 0, removing: false, modelStatusTimer: null
 };
 let toastTimer;
 const PERSIAN_NUM = new Intl.NumberFormat('fa-IR');
@@ -25,7 +25,7 @@ function modelLabel() { return MODELS.find(m => m.id === state.modelId)?.name ||
 function updateIndicator() {
   $('modelIndicator').classList.toggle('ready', state.ready);
   $('modelIndicatorText').textContent = state.ready ? modelLabel() : 'مدل آماده نیست';
-  $('recordButton').disabled = !state.ready || state.loading;
+  $('recordButton').disabled = !state.ready || state.loading || state.stopping || state.processing || state.queue.length > 0;
   $('transcribeFile').disabled = !state.ready || !state.selectedFile || state.loading || state.processing || state.recording;
 }
 function setText(text) {
@@ -51,7 +51,7 @@ function setMode(mode) {
   $('liveTab').classList.toggle('active', live); $('fileTab').classList.toggle('active', !live);
   $('liveTab').setAttribute('aria-selected', String(live)); $('fileTab').setAttribute('aria-selected', String(!live));
   $('liveMode').classList.toggle('hidden', !live); $('fileMode').classList.toggle('hidden', live);
-  $('resultHint').textContent = live ? 'جمله‌ها به‌تدریج در این بخش ظاهر می‌شوند.' : 'متن استخراج‌شده از فایل در این بخش ظاهر می‌شود.';
+  $('resultHint').textContent = live ? 'بعد از توقف ضبط، متن گفتار در این بخش ظاهر می‌شود.' : 'متن استخراج‌شده از فایل در این بخش ظاهر می‌شود.';
 }
 function showModels() {
   if (state.recording || state.processing || state.loading || state.removing) { notify('در زمان پردازش یا دانلود نمی‌توان تنظیمات را تغییر داد.'); return; }
@@ -71,7 +71,7 @@ function renderModels() {
     const active = state.ready && state.modelId === m.id;
     const saved = !!installed[m.id];
     return `<article class="model-card ${m.recommended ? 'highlight' : ''} ${active ? 'is-active' : ''}">
-      <div class="model-card-top"><span class="model-card-icon">${m.id === 'large' ? '✦' : m.id === 'turbo-fp16' ? '◈' : '✳'}</span>${m.recommended ? '<span class="tag">پیشنهادی</span>' : ''}</div>
+      <div class="model-card-top"><span class="model-card-icon">${m.id === 'large' ? '✦' : m.id === 'turbo-fp16' ? '◈' : m.id === 'persian-base' ? 'آ' : '✳'}</span>${m.recommended ? '<span class="tag">پیشنهادی</span>' : ''}</div>
       <h3>${m.name}</h3><span class="model-card-subtitle">${m.subtitle}</span><p>${m.description}</p>
       <span class="model-state ${saved ? '' : 'not-installed'}">${active ? '● مدل فعال' : saved ? '✓ قبلاً دانلود شده' : 'دانلود نشده'}</span>
       <div class="model-card-bottom"><span class="model-size">${m.size}</span></div>
@@ -184,7 +184,7 @@ function processQueue() {
   const job = state.queue.shift();
   if (job.session !== state.session) return processQueue();
   state.processing = true; state.currentJob = job;
-  setProcessing(job.type === 'live' ? 'در حال تبدیل گفتار…' : `در حال تبدیل قطعه ${PERSIAN_NUM.format(state.finishedChunks + 1)} از ${PERSIAN_NUM.format(state.totalChunks)}…`, true);
+  setProcessing(`در حال تبدیل قطعه ${PERSIAN_NUM.format(state.finishedChunks + 1)} از ${PERSIAN_NUM.format(state.totalChunks)}…`, true);
   updateIndicator();
   state.worker.postMessage({ type: 'transcribe', id: job.id, audio: job.audio.buffer }, [job.audio.buffer]);
 }
@@ -195,16 +195,17 @@ function finishJob(data, error) {
   if (job.session === state.session) {
     if (error) notify('خطا در تبدیل صوت: ' + error);
     else appendText(data.text || '');
-    if (job.type === 'file') state.finishedChunks++;
+    state.finishedChunks++;
   }
   if (state.queue.length) processQueue();
   else {
     setProcessing(state.recording ? 'در حال گوش دادن…' : 'آماده');
-    if (!state.recording && job.type === 'file') notify('پردازش فایل به پایان رسید.');
+    if (!state.recording) notify('تبدیل صدا به پایان رسید.');
   }
   updateIndicator();
 }
 async function beginRecording() {
+  if (state.stopping) return;
   if (!state.ready) { showModels(); return; }
   if (state.processing || state.queue.length) { notify('پردازش قبلی هنوز تمام نشده است.'); return; }
   if (!navigator.mediaDevices?.getUserMedia) { notify('مرورگر به میکروفون دسترسی ندارد. از HTTPS استفاده کنید.'); return; }
@@ -226,47 +227,55 @@ async function beginRecording() {
       state.liveFrames.push(data); state.liveLength += data.length;
     };
     $('liveMode').classList.add('recording');
-    $('recordTitle').textContent = 'در حال شنیدن صدای شما…';
-    $('recordSubtitle').textContent = 'با یک بار لمس دوباره میکروفون، ضبط پایان می‌یابد.';
+    $('recordTitle').textContent = 'در حال ضبط صدای شما…';
+    $('recordSubtitle').textContent = 'برای تبدیل صدا به متن، دکمه توقف را بزنید.';
     $('recordButton').setAttribute('aria-label', 'توقف ضبط');
     $('recordTimer').hidden = false;
     state.liveTimer = setInterval(() => $('recordTimer').textContent = formatTime((Date.now() - state.startedAt) / 1000), 350);
-    state.flushTimer = setInterval(() => flushLive(false), 5500);
-    setProcessing('در حال گوش دادن…', true);
+    setProcessing('در حال ضبط؛ تبدیل پس از توقف شروع می‌شود…', true);
   } catch (e) {
     notify('دسترسی به میکروفون انجام نشد: ' + (e?.message || e));
     await stopRecording(true);
   }
 }
-function flushLive(force) {
-  if (!state.liveLength) return;
-  const input = mergeAudio(state.liveFrames);
-  state.liveFrames = []; state.liveLength = 0;
-  const audio = resampleLinear(input, state.audioContext?.sampleRate || 48000);
-  if (audio.length < TARGET_RATE * .45 || !hasVoice(audio)) return;
-  // Limit backlog on slower mobile devices. Keep no more than two queued sections.
-  if (!force && state.queue.filter(j => j.type === 'live').length >= 2) {
-    notify('پردازش از سرعت گفتار عقب افتاده است؛ بخشی از صدا برای جلوگیری از فشار به دستگاه رد شد.');
-    return;
-  }
-  enqueue(audio, 'live');
-}
+// No inference occurs during recording. Keep every frame until the user stops.
+// After stopping, reuse the same chunked offline pipeline as imported audio.
 async function stopRecording(discard = false) {
-  if (!state.recording && !state.mediaStream && !state.audioContext) return;
-  clearInterval(state.flushTimer); clearInterval(state.liveTimer);
-  if (!discard && state.recording) flushLive(true);
+  if (state.stopping || (!state.recording && !state.mediaStream && !state.audioContext)) return;
+  state.stopping = true;
+  $('recordButton').disabled = true;
+  const wasRecording = state.recording;
+  clearInterval(state.liveTimer);
+  // Allow the final in-flight audio worklet messages to reach the main thread.
+  // This is a short capture drain, not transcription in the background.
+  if (wasRecording && !discard) await new Promise(resolve => setTimeout(resolve, 100));
   state.recording = false;
+  const frames = discard ? [] : state.liveFrames;
+  const sampleRate = state.audioContext?.sampleRate || 48000;
   state.processor?.disconnect(); state.audioSource?.disconnect(); state.silenceSink?.disconnect();
   state.mediaStream?.getTracks().forEach(t => t.stop());
   try { await state.audioContext?.close(); } catch {}
   state.audioContext = null; state.mediaStream = null; state.processor = null; state.audioSource = null; state.silenceSink = null;
   state.liveFrames = []; state.liveLength = 0;
   $('liveMode').classList.remove('recording');
-  $('recordTitle').textContent = 'برای شروع، روی میکروفون بزن';
-  $('recordSubtitle').textContent = 'متن صحبت‌هایت همین‌جا، هم‌زمان با پردازش ظاهر می‌شود.';
+  $('recordTitle').textContent = 'برای شروع ضبط، روی میکروفون بزن';
+  $('recordSubtitle').textContent = 'پس از توقف ضبط، تبدیل گفتار به متن شروع می‌شود.';
   $('recordButton').setAttribute('aria-label', 'شروع ضبط');
   $('recordTimer').hidden = true;
-  if (!state.processing && !state.queue.length) setProcessing('آماده');
+  if (!discard && wasRecording && frames.length) {
+    try {
+      setProcessing('در حال آماده‌سازی صدای ضبط‌شده…', true);
+      // Important: do not discard any part when the device is slower than realtime.
+      const chunks = recordingToChunks(frames, sampleRate);
+      state.totalChunks = chunks.length; state.finishedChunks = 0;
+      if (!chunks.length) { setProcessing('آماده'); notify('صدایی برای پردازش ضبط نشده است.'); }
+      else { setText(''); chunks.forEach(part => enqueue(part, 'recording')); }
+    } catch (e) {
+      setProcessing('آماده'); notify('آماده‌سازی صدا ناموفق بود: ' + (e?.message || e));
+    }
+  } else if (!state.processing && !state.queue.length) setProcessing('آماده');
+  state.stopping = false;
+  updateIndicator();
 }
 function selectFile(file) {
   if (!file) return;

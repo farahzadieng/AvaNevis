@@ -1,4 +1,4 @@
-const CACHE = 'avanevis-shell-v0.1.1';
+const CACHE = 'avanevis-shell-v0.1.2';
 const SHELL = ['/', '/index.html', '/styles.css', '/main.js', '/audio-utils.js', '/audio.worklet.js', '/inference.worker.js', '/model-registry.js', '/model-cache.js', '/transcription-quality.js', '/manifest.webmanifest', '/icon-32.png', '/icon-180.png', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png'];
 self.addEventListener('install', event => { event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', event => { event.waitUntil(Promise.all([caches.keys().then(keys => Promise.all(keys.filter(k => (k.startsWith('ava-shell-') || k.startsWith('avanevis-shell-')) && k !== CACHE).map(k => caches.delete(k)))), self.clients.claim()])); });

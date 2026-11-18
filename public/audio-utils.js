@@ -72,3 +72,9 @@ export function formatTime(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 }
+
+// Record first, transcribe later. No audio is dropped while speech is captured.
+export function recordingToChunks(frames, sampleRate, chunkSeconds = 25) {
+  const audio = resampleLinear(mergeAudio(frames), sampleRate);
+  return splitIntoChunks(audio, chunkSeconds);
+}

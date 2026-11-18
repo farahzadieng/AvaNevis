@@ -30,6 +30,7 @@ export function isVariantWeight(url, model) {
   const file = decodeURIComponent(new URL(url).pathname.split('/').at(-1) || '').toLowerCase();
   // ONNX model files have explicit quantization suffixes; tokenizer/config shared.
   const dtype = typeof model.dtype === 'object' ? model.dtype.encoder_model : model.dtype;
+  if (dtype === 'q8') return file.endsWith('_quantized.onnx');
   return file.endsWith('.onnx') && (file.includes(`_${dtype}.onnx`) || file.includes(`_${dtype}_`));
 }
 export function shouldDeleteUrl(url, model, preserveSameRepo) {
@@ -40,8 +41,10 @@ export function shouldDeleteUrl(url, model, preserveSameRepo) {
 // We check for both ONNX weights in the Transformer's real browser cache.
 export async function inspectCachedWeights(model) {
   if (!model || !('caches' in globalThis)) return { complete: false, files: [], reason: 'cache-unavailable' };
-  const dtype = model.dtype.encoder_model;
-  const expected = [`encoder_model_${dtype}.onnx`, `decoder_model_merged_${dtype}.onnx`];
+  const dtype = typeof model.dtype === 'object' ? model.dtype.encoder_model : model.dtype;
+  const expected = dtype === 'q8'
+    ? ['encoder_model_quantized.onnx', 'decoder_model_merged_quantized.onnx']
+    : [`encoder_model_${dtype}.onnx`, `decoder_model_merged_${dtype}.onnx`];
   const present = new Set();
   try {
     for (const name of await caches.keys()) {
